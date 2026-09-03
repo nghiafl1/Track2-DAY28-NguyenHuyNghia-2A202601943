@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from lab28_platform.contracts import IngestionEvent
+from lab28_platform.contracts import FEATURE_REFS, IngestionEvent
 
 
 def event_headers(
@@ -20,7 +20,10 @@ def event_headers(
     ``idempotency-key`` is always required.  Omit ``traceparent`` when no trace
     is active rather than sending an empty, invalid W3C header.
     """
-    raise NotImplementedError("TODO IP01/IP10: propagate trace and idempotency headers")
+    headers = [("idempotency-key", idempotency_key.encode("utf-8"))]
+    if traceparent is not None:
+        headers.append(("traceparent", traceparent.encode("utf-8")))
+    return headers
 
 
 def dedupe_latest(events: Iterable[IngestionEvent]) -> list[IngestionEvent]:
@@ -29,14 +32,44 @@ def dedupe_latest(events: Iterable[IngestionEvent]) -> list[IngestionEvent]:
     Compare ``(occurred_at, event_id)`` so ties do not depend on Kafka delivery
     order.  The Spark Delta MERGE calls this through ``delta_store``.
     """
-    raise NotImplementedError("TODO IP03: prepare a replay-safe Delta MERGE source")
+    latest = {}
+    for event in events:
+        key = event.idempotency_key
+        if key not in latest:
+            latest[key] = event
+        else:
+            current = latest[key]
+            if (event.occurred_at, event.event_id) > (current.occurred_at, current.event_id):
+                latest[key] = event
+    return [latest[k] for k in sorted(latest.keys())]
 
 
 def feast_online_request(asker_id: str) -> dict[str, Any]:
     """Build the Feast ``/get-online-features`` request for ``asker_activity_v1``."""
-    raise NotImplementedError("TODO IP04: preserve the feature registry contract")
+    return {
+        "features": list(FEATURE_REFS),
+        "entities": {"asker_id": [asker_id]},
+        "full_feature_names": False,
+    }
 
 
 def readiness_status(probes: Iterable[dict[str, Any]]) -> str:
     """Return ``ready``, ``degraded`` or ``not_ready`` from probe severity."""
-    raise NotImplementedError("TODO IP07/IP08: implement explicit readiness semantics")
+    has_mandatory_failure = False
+    has_optional_failure = False
+    
+    for probe in probes:
+        is_ready = probe.get("ready", False)
+        is_mandatory = probe.get("mandatory", False)
+        
+        if not is_ready:
+            if is_mandatory:
+                has_mandatory_failure = True
+            else:
+                has_optional_failure = True
+                
+    if has_mandatory_failure:
+        return "not_ready"
+    if has_optional_failure:
+        return "degraded"
+    return "ready"
